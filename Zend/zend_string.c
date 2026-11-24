@@ -435,6 +435,13 @@ ZEND_API bool ZEND_FASTCALL I_REPLACE_SONAME_FNNAME_ZU(NONE,zend_string_equal_va
 {
 	return !memcmp(ZSTR_VAL(s1), ZSTR_VAL(s2), ZSTR_LEN(s1));
 }
+
+/* The same for the engine in a shared library (libphp.so; "Zd" stands for "."),
+ * as in the embed SAPI and in binaries linked against the shared core. */
+ZEND_API bool ZEND_FASTCALL I_REPLACE_SONAME_FNNAME_ZU(libphpZdso,zend_string_equal_val)(const zend_string *s1, const zend_string *s2)
+{
+	return !memcmp(ZSTR_VAL(s1), ZSTR_VAL(s2), ZSTR_LEN(s1));
+}
 #endif
 
 #if defined(__GNUC__) && defined(__i386__)

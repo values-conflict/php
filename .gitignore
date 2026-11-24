@@ -104,6 +104,7 @@ config.h.in
 # ------------------------------------------------------------------------------
 /ext/phar/phar.1
 /ext/phar/phar.phar.1
+/sapi/lib
 /sapi/cgi/php-cgi.1
 /sapi/cli/php.1
 /sapi/fpm/php-fpm.1

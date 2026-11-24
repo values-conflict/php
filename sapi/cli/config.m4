@@ -46,7 +46,12 @@ if test "$PHP_CLI" != "no"; then
     [php_cli.c php_http_parser.c php_cli_server.c ps_title.c php_cli_process_title.c],
     [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1],
     [PHP_CLI_SHARED_OBJS])
-  PHP_CLI_OBJS="$PHP_CLI_OBJS $PHP_CLI_SHARED_OBJS"
+  dnl With the shared core, the CLI objects live in the shared library (libphp),
+  dnl where the embed SAPI finds do_php_cli() too, and the CLI binary is just
+  dnl the main() entry point.
+  AS_VAR_IF([PHP_SHARED_CORE], [yes],
+    [PHP_SAPI_OBJS="$PHP_SAPI_OBJS $PHP_CLI_SHARED_OBJS"],
+    [PHP_CLI_OBJS="$PHP_CLI_OBJS $PHP_CLI_SHARED_OBJS"])
 
   AS_CASE([$host_alias],
     [*aix*], [
@@ -59,7 +64,7 @@ if test "$PHP_CLI" != "no"; then
     [*darwin*], [
       BUILD_CLI="\$(CC) \$(CFLAGS_CLEAN) \$(EXTRA_CFLAGS) \$(EXTRA_LDFLAGS_PROGRAM) \$(LDFLAGS) \$(NATIVE_RPATHS) \$(PHP_GLOBAL_OBJS:.lo=.o) \$(PHP_BINARY_OBJS:.lo=.o) \$(PHP_CLI_OBJS:.lo=.o) \$(PHP_FRAMEWORKS) \$(EXTRA_LIBS) \$(ZEND_EXTRA_LIBS) -o \$(SAPI_CLI_PATH)"
     ], [
-      BUILD_CLI="\$(LIBTOOL) --tag=CC --mode=link \$(CC) -export-dynamic \$(CFLAGS_CLEAN) \$(EXTRA_CFLAGS) \$(EXTRA_LDFLAGS_PROGRAM) \$(LDFLAGS) \$(PHP_RPATHS) \$(PHP_GLOBAL_OBJS:.lo=.o) \$(PHP_BINARY_OBJS:.lo=.o) \$(PHP_CLI_OBJS:.lo=.o) \$(EXTRA_LIBS) \$(ZEND_EXTRA_LIBS) -o \$(SAPI_CLI_PATH)"
+      BUILD_CLI="\$(PHP_LINK_PROGRAM) \$(PHP_EXPORT_DYNAMIC) \$(CFLAGS_CLEAN) \$(EXTRA_CFLAGS) \$(PHP_PROGRAM_LDFLAGS) \$(LDFLAGS) \$(PHP_RPATHS) \$(PHP_CORE_OBJS) \$(call \$(PHP_PROGRAM_OBJS_FN),\$(PHP_CLI_OBJS)) \$(PHP_CORE_LIBS) \$(EXTRA_LIBS) \$(ZEND_EXTRA_LIBS) -o \$(SAPI_CLI_PATH)"
     ])
 
   dnl Set executable for tests.

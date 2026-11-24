@@ -279,6 +279,64 @@ SAPI_LIBTOOL=libphp.la
 dnl Set by SAPIs whose host program dlopen()s libphp without linking against it.
 php_tsrm_dlopened_sapi=no
 
+PHP_ARG_ENABLE([shared-core],
+  [whether to build the engine as a shared library],
+  [AS_HELP_STRING([--enable-shared-core],
+    [Build the engine, main and statically enabled extensions into a shared
+    library (libphp) that the CLI, CGI, FPM and phpdbg binaries link
+    against, instead of each binary carrying its own copy. The embed SAPI is
+    part of that library, and the Apache 2 handler becomes a thin module over
+    it (mod_php), so they can be built together with the binaries])],
+  [no],
+  [no])
+
+dnl How the SAPIs (CLI, CGI, FPM, phpdbg, ...) obtain the engine: either by linking
+dnl the objects directly (default) or by linking the shared core library.
+AS_VAR_IF([PHP_SHARED_CORE], [no], [
+  PHP_CORE_OBJS='$(PHP_GLOBAL_OBJS:.lo=.o) $(PHP_BINARY_OBJS:.lo=.o)'
+  PHP_CORE_DEPS='$(PHP_GLOBAL_OBJS) $(PHP_BINARY_OBJS)'
+  PHP_CORE_LIBS=
+  PHP_CORE_MODULE_LIBS=
+  PHP_CORE_LDFLAGS=
+  PHP_LINK_PROGRAM='$(LIBTOOL) --tag=CC --mode=link $(CC)'
+  PHP_PROGRAM_OBJS_FN=php_plain_objs
+  PHP_PROGRAM_LDFLAGS='$(EXTRA_LDFLAGS_PROGRAM)'
+  PHP_EXPORT_DYNAMIC=-export-dynamic
+  install_core=
+], [
+  dnl The programs find the library through $ORIGIN/../lib: from an installed
+  dnl prefix (bin/ or sbin/ next to lib/) and, thanks to the sapi/lib symlink to
+  dnl libs/, from the build tree (sapi/<name>/<binary>), so the binary that is
+  dnl installed is the one that was tested and carries no path of the build
+  dnl tree. The absolute library directory is the fallback for layouts where
+  dnl lib/ is not next to bin/ (--libdir, --bindir). Libtool is bypassed for the
+  dnl program link: it would otherwise wrap the binaries in scripts.
+  dnl
+  dnl The core binds its own symbols locally (-Bsymbolic, or only its calls with
+  dnl -Bsymbolic-functions when the embed SAPI is built, see below), which keeps
+  dnl calls and, for -Bsymbolic, accesses to hot globals such as executor_globals
+  dnl direct. Binding the globals is only correct if no program carries its own
+  dnl copy of such a global, i.e. no copy relocations, so the programs link
+  dnl position-independent objects (see php_pic_objs).
+  dnl
+  dnl The page-size flags exist so that opcache.huge_code_pages can remap the
+  dnl text segment; the engine's text now lives in the core, so they move there.
+  PHP_CORE_OBJS=
+  PHP_CORE_DEPS='libphp.la sapi/lib'
+  OVERALL_TARGET=libphp.la
+  LIBPHP_CFLAGS=-shared
+  PHP_SUBST([LIBPHP_CFLAGS])
+  PHP_LINK_PROGRAM='$(CC)'
+  PHP_PROGRAM_OBJS_FN=php_pic_objs
+  dnl What libtool turns -export-dynamic into, as it is not used for the programs.
+  PHP_EXPORT_DYNAMIC=-Wl,--export-dynamic
+  PHP_PROGRAM_LDFLAGS=
+  PHP_CORE_LDFLAGS='$(EXTRA_LDFLAGS_PROGRAM)'
+  PHP_CORE_LIBS='-L$(phptempdir) -lphp -Wl,-rpath,\$$ORIGIN/../lib -Wl,-rpath,$(orig_libdir)'
+  PHP_CORE_MODULE_LIBS='-L$(phptempdir) -lphp -Wl,-rpath,\$$ORIGIN -Wl,-rpath,$(orig_libdir)'
+  install_core=install-core
+])
+
 PHP_CONFIGURE_PART([Configuring SAPI modules])
 
 esyscmd(./build/config-stubs sapi)
@@ -877,6 +935,19 @@ AS_VAR_IF([PHP_THREAD_SAFETY], [yes], [
     AS_IF([test "$php_tsrm_tls_model" != "-ftls-model=initial-exec"], [
       AC_DEFINE([TSRM_TLS_MODEL_USE_DEFAULT], [1],
         [Define to 1 to use the compiler's default TLS model.])
+      dnl The shared core is one library for every SAPI, so the TLS model the
+      dnl dlopen()ed one needs is also the one all the others get.
+      AS_VAR_IF([PHP_SHARED_CORE], [yes], [
+        AC_MSG_WARN(m4_text_wrap([
+          The shared core is loaded by a SAPI that is dlopen()ed, so it uses
+          the compiler's default (slower) thread-local storage model in every
+          SAPI, including the CLI and FPM. To avoid that, configure with
+          CFLAGS=-ftls-model=initial-exec and start the program that loads
+          the module (for example httpd) with
+          GLIBC_TUNABLES=glibc.rtld.optional_static_tls=65536 so that glibc
+          has room for the core's thread-local storage when it is loaded.
+        ]))
+      ])
     ])
   ])
 ])
@@ -1123,8 +1194,10 @@ AS_CASE([$host_alias], [[i[3456]86-*-linux-* | x86_64-*-linux-*]],
 enable_shared=yes
 enable_static=yes
 
-case $php_sapi_module in
-  shared[)]
+dnl The shared core is built like a shared SAPI module: PIC objects and
+dnl libtool with shared libraries enabled.
+case $php_sapi_module:$PHP_SHARED_CORE in
+  shared:*|*:yes[)]
     if test "$PHP_CGI" = "no" && test "$PHP_CLI" = "no" && test "$PHP_FPM" = "no" && test "$PHP_LITESPEED" = "no" && test "$PHP_PHPDBG" = "no"; then
       enable_static=no
     fi
@@ -1463,6 +1536,34 @@ AS_VAR_IF([PHP_BUILD_ARCH],,,
   [AC_DEFINE_UNQUOTED([PHP_BUILD_ARCH], ["$PHP_BUILD_ARCH"],
     [The build architecture.])])
 
+AS_VAR_IF([PHP_SHARED_CORE], [no],, [
+  AS_VAR_IF([PHP_SAPI], [none],, [
+    AC_MSG_ERROR([--enable-shared-core cannot yet be combined with the $PHP_SAPI SAPI module])
+  ])
+  dnl The programs are ours and avoid copy relocations. The embed library is
+  dnl linked by programs we do not control, which by default do get them, and
+  dnl -Bsymbolic would then split the engine's globals in two.
+  dnl Only calls are bound locally then (-Bsymbolic-functions): the engine's data
+  dnl stays interposable, so a copy in an embedder is the one both sides use.
+  AS_VAR_IF([PHP_EMBED], [no],
+    [PHP_CORE_LDFLAGS="-Wl,-Bsymbolic $PHP_CORE_LDFLAGS"],
+    [PHP_CORE_LDFLAGS="-Wl,-Bsymbolic-functions $PHP_CORE_LDFLAGS"])
+  dnl Only tested on Linux (ELF, $ORIGIN run paths, GNU ld flags).
+  AS_CASE([$host_alias],
+    [*linux*], [],
+    [AC_MSG_ERROR([--enable-shared-core is only supported on Linux so far])])
+])
+
+PHP_SUBST([PHP_CORE_OBJS])
+PHP_SUBST([PHP_MODULE_REGISTRY_OBJS])
+PHP_SUBST([PHP_CORE_DEPS])
+PHP_SUBST([PHP_CORE_LIBS])
+PHP_SUBST([PHP_CORE_MODULE_LIBS])
+PHP_SUBST([PHP_LINK_PROGRAM])
+PHP_SUBST([PHP_PROGRAM_OBJS_FN])
+PHP_SUBST([PHP_EXPORT_DYNAMIC])
+PHP_SUBST([PHP_PROGRAM_LDFLAGS])
+PHP_SUBST([PHP_CORE_LDFLAGS])
 PHP_SUBST([PHP_FASTCGI_OBJS])
 PHP_SUBST([PHP_SAPI_OBJS])
 PHP_SUBST([PHP_BINARY_OBJS])
@@ -1626,7 +1727,7 @@ else
 fi;
 
 all_targets="\$(OVERALL_TARGET) \$(PHP_MODULES) \$(PHP_ZEND_EX) \$(PHP_BINARIES) $pharcmd"
-install_targets="$install_sapi $install_modules $install_binaries install-build install-headers install-programs $install_pear $pharcmd_install"
+install_targets="$install_sapi $install_core $install_modules $install_binaries install-build install-headers install-programs $install_pear $pharcmd_install"
 
 PHP_SUBST([all_targets])
 PHP_SUBST([install_targets])
@@ -1733,14 +1834,38 @@ PHP_ADD_SOURCES([main/streams], m4_normalize([
   ]),
   [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1])
 
-PHP_ADD_SOURCES([/main],
-  [internal_functions.c],
-  [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1],
-  [sapi])
-PHP_ADD_SOURCES_X([/main],
-  [internal_functions_cli.c],
-  [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1],
-  [PHP_BINARY_OBJS])
+dnl The list of the extensions that the engine registers at startup. The programs
+dnl have the one with the CLI extensions (pcntl, readline), the SAPI modules the
+dnl one without them.
+AS_VAR_IF([PHP_SHARED_CORE], [yes], [
+  dnl With the shared core, both lists are part of the library. The programs and
+  dnl the embed SAPI use the complete one by default; a SAPI module installs the
+  dnl other one when it is loaded (see php_module_registry.c).
+  PHP_ADD_SOURCES([/main],
+    [internal_functions_cli.c],
+    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1],
+    [sapi])
+  PHP_ADD_SOURCES([/main],
+    [internal_functions.c],
+    m4_normalize([
+      -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1
+      -Dphp_register_internal_extensions=php_register_module_internal_extensions
+    ]),
+    [sapi])
+  PHP_ADD_SOURCES_X([/main],
+    [php_module_registry.c],
+    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1],
+    [PHP_MODULE_REGISTRY_OBJS])
+], [
+  PHP_ADD_SOURCES([/main],
+    [internal_functions.c],
+    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1],
+    [sapi])
+  PHP_ADD_SOURCES_X([/main],
+    [internal_functions_cli.c],
+    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1],
+    [PHP_BINARY_OBJS])
+])
 
 PHP_ADD_SOURCES([Zend], m4_normalize([
     Optimizer/block_pass.c

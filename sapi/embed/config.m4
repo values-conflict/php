@@ -21,14 +21,30 @@ if test "$PHP_EMBED" != "no"; then
     AC_MSG_RESULT([$PHP_EMBED_TYPE])
     PHP_SUBST([LIBPHP_CFLAGS])
     AC_SUBST([PHP_EMBED_TYPE])
-    PHP_SELECT_SAPI([embed],
-      [$PHP_EMBED_TYPE],
-      [php_embed.c],
-      [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1])
-    PHP_INSTALL_HEADERS([sapi/embed], [php_embed.h])
 
-    dnl Link the CLI objects into libphp for do_php_cli().
-    PHP_SAPI_OBJS="$PHP_SAPI_OBJS $PHP_CLI_SHARED_OBJS"
+    dnl A static libphp.a is a complete engine of its own.
+    AS_IF([test "$PHP_SHARED_CORE" = "yes" && test "$PHP_EMBED_TYPE" != "shared"],
+      [AC_MSG_ERROR([--enable-shared-core only supports --enable-embed=shared])])
+
+    AS_VAR_IF([PHP_SHARED_CORE], [yes], [
+      dnl With the shared core, the embed SAPI is part of the shared library the
+      dnl other SAPIs link against, which is libphp, so that embedders link
+      dnl against the same library as before. It does not take the SAPI module
+      dnl slot. The CLI objects are part of the library, too (see the CLI SAPI).
+      PHP_ADD_BUILD_DIR([sapi/embed])
+      PHP_INSTALLED_SAPIS="$PHP_INSTALLED_SAPIS embed"
+      PHP_ADD_SOURCES([sapi/embed], [php_embed.c],
+        [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1], [sapi])
+    ], [
+      PHP_SELECT_SAPI([embed],
+        [$PHP_EMBED_TYPE],
+        [php_embed.c],
+        [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1])
+
+      dnl Link the CLI objects into libphp for do_php_cli().
+      PHP_SAPI_OBJS="$PHP_SAPI_OBJS $PHP_CLI_SHARED_OBJS"
+    ])
+    PHP_INSTALL_HEADERS([sapi/embed], [php_embed.h])
   ])
 else
   AC_MSG_RESULT([no])

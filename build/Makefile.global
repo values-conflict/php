@@ -15,8 +15,19 @@ build-modules: $(PHP_MODULES) $(PHP_ZEND_EX)
 build-binaries: $(PHP_BINARIES)
 
 libphp.la: $(PHP_GLOBAL_OBJS) $(PHP_SAPI_OBJS)
-	$(LIBTOOL) --tag=CC --mode=link $(CC) $(LIBPHP_CFLAGS) $(CFLAGS) $(EXTRA_CFLAGS) -rpath $(phptempdir) $(EXTRA_LDFLAGS) $(LDFLAGS) $(PHP_RPATHS) $(PHP_GLOBAL_OBJS) $(PHP_SAPI_OBJS) $(EXTRA_LIBS) $(ZEND_EXTRA_LIBS) -o $@
+	$(LIBTOOL) --tag=CC --mode=link $(CC) $(LIBPHP_CFLAGS) $(PHP_CORE_LDFLAGS) $(CFLAGS) $(EXTRA_CFLAGS) -rpath $(phptempdir) $(EXTRA_LDFLAGS) $(LDFLAGS) $(PHP_RPATHS) $(PHP_GLOBAL_OBJS) $(PHP_SAPI_OBJS) $(EXTRA_LIBS) $(ZEND_EXTRA_LIBS) -o $@
 	-@$(LIBTOOL) --tag=CC --mode=install cp $@ $(phptempdir)/$@ >/dev/null 2>&1
+
+# The object a program links for a libtool object: the plain one, or the
+# position-independent one from .libs/. Binaries linked against the shared core
+# use the latter, so they get no copy relocations for the core's global data.
+php_plain_objs = $(1:.lo=.o)
+php_pic_objs = $(foreach o,$(1),$(dir $(o)).libs/$(notdir $(o:.lo=.o)))
+
+# In the build tree the programs find the shared core through the same relative
+# path as in an installed prefix (see PHP_CORE_LIBS).
+sapi/lib:
+	@$(LN_S) ../libs sapi/lib
 
 libphp.dylib: libphp.la
 	$(LIBTOOL) --tag=CC --mode=link $(CC) -dynamiclib $(LIBPHP_CFLAGS) $(CFLAGS_CLEAN) $(EXTRA_CFLAGS) -rpath $(phptempdir) -install_name @rpath/$@ $(EXTRA_LDFLAGS) $(LDFLAGS) $(PHP_RPATHS) $(PHP_GLOBAL_OBJS) $(PHP_SAPI_OBJS) $(EXTRA_LIBS) $(ZEND_EXTRA_LIBS) -o $@
@@ -39,6 +50,11 @@ install-sapi: $(OVERALL_TARGET)
 		done; \
 	fi
 	@$(INSTALL_IT)
+
+install-core: libphp.la
+	@echo "Installing PHP shared core:       $(INSTALL_ROOT)$(orig_libdir)/"
+	@$(mkinstalldirs) $(INSTALL_ROOT)$(orig_libdir)
+	@$(INSTALL) -m 0755 $(phptempdir)/libphp.$(SHLIB_DL_SUFFIX_NAME) $(INSTALL_ROOT)$(orig_libdir)
 
 install-binaries: build-binaries $(install_binary_targets)
 
@@ -121,7 +137,7 @@ clean:
 	find . -name \*.la -o -name \*.a | xargs rm -f
 	find . -name \*.so | xargs rm -f
 	find . -name .libs -a -type d|xargs rm -rf
-	rm -f libphp.la $(SAPI_CLI_PATH) $(SAPI_CGI_PATH) $(SAPI_LITESPEED_PATH) $(SAPI_FPM_PATH) $(SAPI_PHPDBG_PATH) $(SAPI_PHPDBG_SHARED_PATH) $(OVERALL_TARGET) modules/* libs/*
+	rm -f sapi/lib libphp.la $(SAPI_CLI_PATH) $(SAPI_CGI_PATH) $(SAPI_LITESPEED_PATH) $(SAPI_FPM_PATH) $(SAPI_PHPDBG_PATH) $(SAPI_PHPDBG_SHARED_PATH) $(OVERALL_TARGET) modules/* libs/*
 	rm -f ext/opcache/jit/ir/gen_ir_fold_hash
 	rm -f ext/opcache/jit/ir/minilua
 	rm -f ext/opcache/jit/ir/ir_fold_hash.h
@@ -147,7 +163,7 @@ prof-clean:
 	find . -name \*.lo -o -name \*.o | xargs rm -f
 	find . -name \*.la -o -name \*.a | xargs rm -f
 	find . -name \*.so | xargs rm -f
-	rm -f libphp.la $(SAPI_CLI_PATH) $(SAPI_CGI_PATH) $(SAPI_LITESPEED_PATH) $(SAPI_FPM_PATH) $(SAPI_PHPDBG_PATH) $(SAPI_PHPDBG_SHARED_PATH) $(OVERALL_TARGET) modules/* libs/*
+	rm -f sapi/lib libphp.la $(SAPI_CLI_PATH) $(SAPI_CGI_PATH) $(SAPI_LITESPEED_PATH) $(SAPI_FPM_PATH) $(SAPI_PHPDBG_PATH) $(SAPI_PHPDBG_SHARED_PATH) $(OVERALL_TARGET) modules/* libs/*
 
 prof-use:
 	CCACHE_DISABLE=1 $(MAKE) PROF_FLAGS=-fprofile-use all

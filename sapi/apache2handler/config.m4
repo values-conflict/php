@@ -100,6 +100,9 @@ if test "$PHP_APXS2" != "no"; then
   php_tsrm_dlopened_sapi=yes
 
   php_sapi_apache2handler_type=shared
+  php_apache2handler_install_obj=$SAPI_LIBTOOL
+  AS_VAR_IF([PHP_SHARED_CORE], [yes],
+    [php_apache2handler_install_obj=libs/mod_php.so])
   AS_CASE([$host_alias],
     [*aix*], [
       EXTRA_LDFLAGS="$EXTRA_LDFLAGS -Wl,-brtl -Wl,-bI:$APXS_LIBEXECDIR/httpd.exp"
@@ -121,7 +124,7 @@ if test "$PHP_APXS2" != "no"; then
       php_sapi_apache2handler_type=bundle
       INSTALL_IT="$INSTALL_IT $SAPI_SHARED"
     ],
-    [INSTALL_IT="$INSTALL_IT $SAPI_LIBTOOL"])
+    [INSTALL_IT="$INSTALL_IT $php_apache2handler_install_obj"])
 
   PHP_SELECT_SAPI([apache2handler],
     [$php_sapi_apache2handler_type],
@@ -133,6 +136,21 @@ if test "$PHP_APXS2" != "no"; then
       $APU_CFLAGS
       -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1
     ])
+
+  AS_VAR_IF([PHP_SHARED_CORE], [yes], [
+    dnl The module is a thin library over the shared libphp, so it can be built next to
+    dnl the other SAPIs. It is called mod_php so that it does not collide with
+    dnl the libphp of the embed SAPI.
+    PHP_ADD_MAKEFILE_FRAGMENT([$abs_srcdir/sapi/apache2handler/Makefile.frag],
+      [$abs_srcdir/sapi/apache2handler],
+      [sapi/apache2handler])
+    SAPI_APACHE2HANDLER_PATH=libs/mod_php.so
+    APACHE2HANDLER_INSTALL="$INSTALL_IT"
+    BUILD_APACHE2HANDLER="\$(CC) -shared -Wl,-soname,mod_php.so \$(CFLAGS_CLEAN) \$(EXTRA_CFLAGS) \$(LDFLAGS) \$(call php_pic_objs,\$(PHP_APACHE2HANDLER_OBJS) \$(PHP_MODULE_REGISTRY_OBJS)) \$(PHP_CORE_MODULE_LIBS) \$(EXTRA_LIBS) \$(ZEND_EXTRA_LIBS) -o \$(SAPI_APACHE2HANDLER_PATH)"
+    PHP_SUBST([SAPI_APACHE2HANDLER_PATH])
+    PHP_SUBST([APACHE2HANDLER_INSTALL])
+    PHP_SUBST([BUILD_APACHE2HANDLER])
+  ])
 
   AS_IF([$APXS_HTTPD -V 2>/dev/null | grep 'threaded:.*yes' >/dev/null 2>&1], [
     APACHE_THREADED_MPM=yes

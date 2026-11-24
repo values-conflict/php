@@ -116,6 +116,43 @@ PHP 8.7 INTERNALS UPGRADE NOTES
 
 - Unix build system changes:
   . Autoconf minimum required version upgraded to 2.71.
+  . The new --enable-shared-core configure option builds the engine, main and
+    the statically enabled extensions once into libphp.so, and the CLI, CGI,
+    FPM and phpdbg binaries link against it instead of each carrying a copy.
+    The embed SAPI becomes part of that library and the Apache 2 handler a
+    thin module over it (libs/mod_php.so), which makes it possible to build
+    them in a single configuration. Only these SAPIs are supported. The
+    binaries find libphp.so through $ORIGIN/../lib, then the library directory
+    given to configure (only the latter is honored by the dynamic linker for
+    programs with file capabilities or the setuid bit). Notes for the build
+    system and for embedders:
+    - The PHP_SELECT_SAPI() macro does not count a SAPI that is built over the
+      shared core against the limit of one SAPI module.
+    - The PHP_CORE_OBJS, PHP_CORE_DEPS, PHP_CORE_LIBS, PHP_LINK_PROGRAM and
+      PHP_PROGRAM_OBJS_FN make variables describe how a program obtains the
+      engine; SAPI Makefile fragments and BUILD_* rules should use them rather
+      than PHP_GLOBAL_OBJS and PHP_BINARY_OBJS directly.
+    - The extensions that are declared with the "cli" class in
+      PHP_NEW_EXTENSION() (pcntl, readline) are part of the library, but only
+      the programs and the embed SAPI register them, as before. A SAPI module
+      such as the Apache 2 handler links main/php_module_registry.c, which
+      installs the library's other list of extensions when it is loaded.
+    - zend_signal_activate() and zend_signal_deactivate() are now ZEND_API,
+      because programs outside the library use them.
+    - Valgrind's replacement of zend_string_equal_val() also matches an engine
+      in libphp.so, not only in an executable.
+    - Only Linux is supported so far; configure fails on other systems.
+    - Without --enable-embed the library is linked with -Bsymbolic, which
+      requires that no program has copy relocations for its global data.
+      Programs outside the tree that link libphp.so must be built with -fPIC
+      (or -mno-direct-extern-access) if the library is built without embed.
+      With --enable-embed, -Bsymbolic-functions is used instead, which only
+      binds calls inside the library locally and is safe for such programs.
+    - With ZTS, a library that a program loads with dlopen() (the Apache 2
+      handler) forces the compiler's default TLS model on every SAPI. To keep
+      the faster initial-exec model, configure with
+      CFLAGS=-ftls-model=initial-exec and run that program with
+      GLIBC_TUNABLES=glibc.rtld.optional_static_tls=65536.
 
 ========================
 3. Module changes

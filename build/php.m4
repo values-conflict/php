@@ -848,16 +848,26 @@ dnl PHP_SELECT_SAPI(name, type[, sources [, extra-cflags]])
 dnl
 dnl When developing PHP SAPI modules, this macro specifies the SAPI "name" by
 dnl its "type", how PHP is supposed to be built (static, shared, bundle, or
-dnl program). It optionally adds the blank-or-newline-separated source files
-dnl "sources" and compilation flags "extra-cflags" to build the SAPI-specific
-dnl objects. For example:
+dnl program). With --enable-shared-core, any type but static is built like a
+dnl program: a thin executable or library over the shared engine that does not
+dnl occupy the single SAPI module slot. It optionally adds the
+dnl blank-or-newline-separated source files "sources" and compilation flags
+dnl "extra-cflags" to build the SAPI-specific objects. For example:
 dnl   PHP_SELECT_SAPI([apache2handler],
 dnl     [shared],
 dnl     [<sources...>],
 dnl     [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1])
 dnl
 AC_DEFUN([PHP_SELECT_SAPI],[
-  if test "$2" = "program"; then
+  dnl With the shared core a SAPI module is not a second copy of the engine but
+  dnl a thin library over the shared one, built and installed like a program.
+  dnl Only the non-program types are limited to a single slot otherwise.
+  php_sapi_thin=no
+  if test "$PHP_SHARED_CORE" = "yes" && test "$2" != "program" && test "$2" != "static"; then
+    php_sapi_thin=yes
+  fi
+
+  if test "$2" = "program" || test "$php_sapi_thin" = "yes"; then
     PHP_BINARIES="$PHP_BINARIES $1"
   elif test "$PHP_SAPI" != "none"; then
     AC_MSG_ERROR([
@@ -883,14 +893,22 @@ AC_DEFUN([PHP_SELECT_SAPI],[
     PHP_SUBST(PHP_[]translit($1,a-z0-9-,A-Z0-9_)[]_OBJS)
     ifelse($3,,,[PHP_ADD_SOURCES_X([sapi/$1],[$3],[$4],PHP_[]translit($1,a-z0-9-,A-Z0-9_)[]_OBJS)])
   ],[
-    case "$2" in
-    static[)] PHP_BUILD_STATIC;;
-    shared[)] PHP_BUILD_SHARED;;
-    shared-dylib[)] PHP_BUILD_SHARED_DYLIB;;
-    bundle[)] PHP_BUILD_BUNDLE;;
-    esac
-    install_sapi="install-sapi"
-    ifelse($3,,,[PHP_ADD_SOURCES([sapi/$1],[$3],[$4],[sapi])])
+    if test "$php_sapi_thin" = "yes"; then
+      PHP_BUILD_PROGRAM
+      install_binaries="install-binaries"
+      install_binary_targets="$install_binary_targets install-$1"
+      PHP_SUBST(PHP_[]translit($1,a-z0-9-,A-Z0-9_)[]_OBJS)
+      ifelse($3,,,[PHP_ADD_SOURCES_X([sapi/$1],[$3],[$4],PHP_[]translit($1,a-z0-9-,A-Z0-9_)[]_OBJS)])
+    else
+      case "$2" in
+      static[)] PHP_BUILD_STATIC;;
+      shared[)] PHP_BUILD_SHARED;;
+      shared-dylib[)] PHP_BUILD_SHARED_DYLIB;;
+      bundle[)] PHP_BUILD_BUNDLE;;
+      esac
+      install_sapi="install-sapi"
+      ifelse($3,,,[PHP_ADD_SOURCES([sapi/$1],[$3],[$4],[sapi])])
+    fi
   ])
 ])
 
@@ -964,10 +982,16 @@ dnl ---------------------------------------------- Shared module
   if test "$3" != "shared" && test "$3" != "yes" && test "$4" = "cli"; then
 dnl ---------------------------------------------- CLI static module
     [PHP_]translit($1,a-z_-,A-Z__)[_SHARED]=no
-    case "$PHP_SAPI" in
-      cgi|embed|phpdbg[)]
+    case "$PHP_SAPI:$PHP_SHARED_CORE" in
+      cgi:*|embed:*|phpdbg:*[)]
         PHP_ADD_SOURCES($ext_dir,$2,$ac_extra_static,)
         EXT_STATIC="$EXT_STATIC $1;$ext_dir"
+        ;;
+      *:yes[)]
+        dnl The code is part of the shared core (the CLI sources need it), but only
+        dnl the registry of the programs and the embed SAPI lists the extension,
+        dnl not that of the SAPI modules (see main/php_module_registry.c).
+        PHP_ADD_SOURCES($ext_dir,$2,$ac_extra_static,)
         ;;
       *[)]
         PHP_ADD_SOURCES($ext_dir,$2,$ac_extra_static,cli)

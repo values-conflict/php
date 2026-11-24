@@ -3477,9 +3477,39 @@ accel_remap_huge_pages(void *start, size_t size, size_t real_size)
 	return SUCCESS;
 }
 
+/* The object that contains the engine and this code: the executable, or the
+ * shared library holding both when the executable is linked against one. If this
+ * code is in a library of its own (opcache as a shared extension), there is no
+ * such object. */
+struct accel_program_object {
+	uintptr_t addr;
+	uintptr_t engine_addr;
+	uintptr_t base_addr;
+	const char *name;
+};
+
 static int accel_dl_iterate_phdr_callback(struct dl_phdr_info *info, size_t size, void *data) {
-	if (info->dlpi_name == NULL || strcmp(info->dlpi_name, "") == 0) {
-		*((uintptr_t*)data) = info->dlpi_addr;
+	struct accel_program_object *object = data;
+
+	bool has_addr = false, has_engine_addr = false;
+
+	for (ElfW(Half) idx = 0; idx < info->dlpi_phnum; idx++) {
+		const ElfW(Phdr) *phdr = &info->dlpi_phdr[idx];
+		uintptr_t start = (uintptr_t)info->dlpi_addr + phdr->p_vaddr;
+		if (phdr->p_type != PT_LOAD) {
+			continue;
+		}
+		if (object->addr >= start && object->addr < start + phdr->p_memsz) {
+			has_addr = true;
+		}
+		if (object->engine_addr >= start && object->engine_addr < start + phdr->p_memsz) {
+			has_engine_addr = true;
+		}
+	}
+
+	if (has_addr && has_engine_addr) {
+		object->base_addr = info->dlpi_addr;
+		object->name = info->dlpi_name;
 		return 1;
 	}
 	return 0;
@@ -3487,35 +3517,48 @@ static int accel_dl_iterate_phdr_callback(struct dl_phdr_info *info, size_t size
 
 static zend_result accel_find_program_section(ElfW(Shdr) *section) {
 
-	uintptr_t base_addr;
-	if (dl_iterate_phdr(accel_dl_iterate_phdr_callback, &base_addr) != 1) {
-		zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME ": opcache.huge_code_pages: executable base address not found");
+	struct accel_program_object object = {
+		(uintptr_t)accel_find_program_section, (uintptr_t)zend_startup, 0, NULL
+	};
+	if (dl_iterate_phdr(accel_dl_iterate_phdr_callback, &object) != 1) {
+		zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME ": opcache.huge_code_pages: program base address not found");
 		return FAILURE;
 	}
+	uintptr_t base_addr = object.base_addr;
 
+	/* The main program has no name; a library is opened by the name it was loaded with. */
+	const char *path = NULL;
+	if (object.name != NULL && object.name[0] != '\0') {
+		path = object.name;
+	}
 #if defined(__linux__)
-	FILE *f = fopen("/proc/self/exe", "r");
-#elif defined(__FreeBSD__)
-	char path[4096];
-	int mib[4];
-	size_t len = sizeof(path);
-
-	mib[0] = CTL_KERN;
-	mib[1] = KERN_PROC;
-	mib[2] = KERN_PROC_PATHNAME;
-	mib[3] = -1; /* Current process */
-
-	if (sysctl(mib, 4, path, &len, NULL, 0) == -1) {
-		zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME ": opcache.huge_code_pages: sysctl(KERN_PROC_PATHNAME) failed: %s (%d)",
-				strerror(errno), errno);
-		return FAILURE;
+	if (path == NULL) {
+		path = "/proc/self/exe";
 	}
+#elif defined(__FreeBSD__)
+	char exe_path[4096];
+	if (path == NULL) {
+		int mib[4];
+		size_t len = sizeof(exe_path);
+
+		mib[0] = CTL_KERN;
+		mib[1] = KERN_PROC;
+		mib[2] = KERN_PROC_PATHNAME;
+		mib[3] = -1; /* Current process */
+
+		if (sysctl(mib, 4, exe_path, &len, NULL, 0) == -1) {
+			zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME ": opcache.huge_code_pages: sysctl(KERN_PROC_PATHNAME) failed: %s (%d)",
+					strerror(errno), errno);
+			return FAILURE;
+		}
+		path = exe_path;
+	}
+#endif
 
 	FILE *f = fopen(path, "r");
-#endif
 	if (!f) {
-		zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME ": opcache.huge_code_pages: fopen(/proc/self/exe) failed: %s (%d)",
-				strerror(errno), errno);
+		zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME ": opcache.huge_code_pages: fopen(%s) failed: %s (%d)",
+				path, strerror(errno), errno);
 		return FAILURE;
 	}
 

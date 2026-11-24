@@ -93,11 +93,10 @@ if test "$PHP_PHPDBG" != "no"; then
   SAPI_PHPDBG_PATH="sapi/phpdbg/phpdbg"
   SAPI_PHPDBG_SHARED_PATH="sapi/phpdbg/libphpdbg.la"
 
-  BUILD_PHPDBG="\$(LIBTOOL) --tag=CC --mode=link \
-        \$(CC) -export-dynamic \$(CFLAGS_CLEAN) \$(EXTRA_CFLAGS) \$(EXTRA_LDFLAGS_PROGRAM) \$(LDFLAGS) \$(PHP_RPATHS) \
-                \$(PHP_GLOBAL_OBJS:.lo=.o) \
-                \$(PHP_BINARY_OBJS:.lo=.o) \
-                \$(PHP_PHPDBG_OBJS:.lo=.o) \
+  BUILD_PHPDBG="\$(PHP_LINK_PROGRAM) \$(PHP_EXPORT_DYNAMIC) \$(CFLAGS_CLEAN) \$(EXTRA_CFLAGS) \$(PHP_PROGRAM_LDFLAGS) \$(LDFLAGS) \$(PHP_RPATHS) \
+                \$(PHP_CORE_OBJS) \
+                \$(call \$(PHP_PROGRAM_OBJS_FN),\$(PHP_PHPDBG_OBJS)) \
+                \$(PHP_CORE_LIBS) \
                 \$(EXTRA_LIBS) \
                 \$(PHPDBG_EXTRA_LIBS) \
                 \$(ZEND_EXTRA_LIBS) \
@@ -113,6 +112,12 @@ if test "$PHP_PHPDBG" != "no"; then
                 \$(PHPDBG_EXTRA_LIBS) \
                 \$(ZEND_EXTRA_LIBS) \
          -o \$(SAPI_PHPDBG_SHARED_PATH)"
+
+  dnl The shared library is a thin library over the shared core, too.
+  AS_VAR_IF([PHP_SHARED_CORE], [yes], [
+    SAPI_PHPDBG_SHARED_PATH="sapi/phpdbg/libphpdbg.so"
+    BUILD_PHPDBG_SHARED="\$(CC) -shared -Wl,-soname,libphpdbg.so \$(CFLAGS_CLEAN) \$(EXTRA_CFLAGS) \$(LDFLAGS) \$(call php_pic_objs,\$(PHP_PHPDBG_OBJS)) \$(PHP_CORE_MODULE_LIBS) \$(PHPDBG_EXTRA_LIBS) \$(EXTRA_LIBS) \$(ZEND_EXTRA_LIBS) -o \$(SAPI_PHPDBG_SHARED_PATH)"
+  ])
 
   PHP_SUBST([PHPDBG_EXTRA_LIBS])
   PHP_SUBST([SAPI_PHPDBG_PATH])
